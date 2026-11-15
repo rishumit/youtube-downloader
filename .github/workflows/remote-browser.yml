@@ -15,8 +15,20 @@ jobs:
       - name: Install browser and server packages
         run: |
           set -euo pipefail
+          . /etc/os-release
+          if [ "$ID" != "ubuntu" ] || [ -z "$VERSION_CODENAME" ]; then
+            echo "::error::This workflow expects an Ubuntu GitHub-hosted runner."
+            exit 1
+          fi
+
+          curl -fL https://xpra.org/xpra.asc -o /tmp/xpra.asc
+          sudo install -D -m 0644 /tmp/xpra.asc /usr/share/keyrings/xpra.asc
+          curl -fL "https://raw.githubusercontent.com/Xpra-org/xpra/master/packaging/repos/${VERSION_CODENAME}/xpra.sources" \
+            -o /tmp/xpra.sources
+          sudo install -m 0644 /tmp/xpra.sources /etc/apt/sources.list.d/xpra.sources
+
           sudo apt-get update
-          sudo apt-get install -y xpra nginx apache2-utils curl ca-certificates
+          sudo apt-get install -y xpra xpra-html5 nginx apache2-utils curl ca-certificates
 
           curl -fL https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb \
             -o /tmp/google-chrome-stable.deb
