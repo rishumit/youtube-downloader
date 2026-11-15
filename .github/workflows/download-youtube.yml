@@ -1,0 +1,119 @@
+name: Download YouTube Videos
+
+on:
+  workflow_dispatch:
+    inputs:
+      video_urls:
+        description: YouTube video, playlist, or channel URLs (one per line or separated by spaces)
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  download-and-release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Python dependencies
+        run: python -m pip install --upgrade yt-dlp bgutil-ytdlp-pot-provider
+
+      - name: Install ffmpeg
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ffmpeg
+
+      - name: Set up Deno
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - name: Start PO Token provider
+        run: |
+          git clone --depth 1 --single-branch --branch 2.0.1 \
+            https://github.com/Brainicism/bgutil-ytdlp-pot-provider.git \
+            "$RUNNER_TEMP/bgutil"
+
+          cd "$RUNNER_TEMP/bgutil/server"
+          deno install --allow-scripts=npm:canvas --frozen
+
+          deno run --allow-env --allow-net --allow-ffi=. --allow-read=. \
+            src/main.ts > "$RUNNER_TEMP/bgutil-pot-provider.log" 2>&1 &
+
+          provider_pid=$!
+          for attempt in {1..10}; do
+            if ! kill -0 "$provider_pid" 2>/dev/null; then
+              cat "$RUNNER_TEMP/bgutil-pot-provider.log"
+              echo "PO Token provider stopped unexpectedly."
+              exit 1
+            fi
+            sleep 1
+          done
+
+      - name: Download videos and create ZIP
+        env:
+          VIDEO_URLS: ${{ inputs.video_urls }}
+          YOUTUBE_COOKIES: ${{ secrets.YOUTUBE_COOKIES }}
+        run: |
+          set -euo pipefail
+
+          cookie_file="$RUNNER_TEMP/youtube-cookies.txt"
+          trap 'rm -f "$cookie_file"' EXIT
+
+          mapfile -t urls < <(python -c 'import os, re; print("\n".join(re.findall(r"\S+", os.environ["VIDEO_URLS"])))')
+          if ((${#urls[@]} == 0)); then
+            echo "Enter at least one YouTube URL."
+            exit 1
+          fi
+
+          args=(
+            --remote-components ejs:github
+            --js-runtimes deno
+            --extractor-args "youtube:player_client=mweb"
+            --yes-playlist
+            -f "bestvideo[ext=mp4]+bestaudio[ext=m4a]/mp4/best"
+            --merge-output-format mp4
+            -o 'downloads/%(title)s [%(id)s].%(ext)s'
+          )
+
+          if [[ -n "${YOUTUBE_COOKIES:-}" ]]; then
+            umask 077
+            printf '%s' "$YOUTUBE_COOKIES" > "$cookie_file"
+            args+=(--cookies "$cookie_file")
+          fi
+
+          yt-dlp "${args[@]}" -- "${urls[@]}"
+
+          python - <<'PY'
+          from pathlib import Path
+          import zipfile
+
+          downloads = Path("downloads")
+          files = sorted(path for path in downloads.rglob("*") if path.is_file())
+          if not files:
+              raise SystemExit("No videos were downloaded.")
+
+          with zipfile.ZipFile("youtube-downloads.zip", "w", compression=zipfile.ZIP_STORED) as archive:
+              for path in files:
+                  archive.write(path, arcname=path.relative_to(downloads))
+          PY
+
+      - name: Upload ZIP to GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: youtube-${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          gh release create "$RELEASE_TAG" youtube-downloads.zip \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "YouTube downloads $RELEASE_TAG" \
+            --notes "Videos downloaded by GitHub Actions run $GITHUB_RUN_ID."
