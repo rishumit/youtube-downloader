@@ -1,0 +1,106 @@
+name: Temporary remote browser
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  browser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+
+    steps:
+      - name: Install browser and server packages
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y xpra nginx apache2-utils curl ca-certificates
+
+          curl -fL https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb \
+            -o /tmp/google-chrome-stable.deb
+          sudo apt-get install -y /tmp/google-chrome-stable.deb
+
+          curl -fL https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb \
+            -o /tmp/cloudflared.deb
+          sudo apt-get install -y /tmp/cloudflared.deb
+
+      - name: Configure password-protected browser access
+        env:
+          XPRA_PASSWORD: ${{ secrets.XPRA_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [ -z "$XPRA_PASSWORD" ]; then
+            echo "::error::Add a repository Actions secret named XPRA_PASSWORD before running this workflow."
+            exit 1
+          fi
+
+          printf '%s\n' "$XPRA_PASSWORD" | sudo htpasswd -B -i -c /etc/nginx/.htpasswd browser
+          sudo tee /etc/nginx/conf.d/remote-browser.conf >/dev/null <<'NGINX'
+          map $http_upgrade $connection_upgrade {
+              default upgrade;
+              '' close;
+          }
+
+          server {
+              listen 127.0.0.1:8080;
+
+              location / {
+                  auth_basic "Remote browser";
+                  auth_basic_user_file /etc/nginx/.htpasswd;
+                  proxy_pass http://127.0.0.1:14500;
+                  proxy_http_version 1.1;
+                  proxy_set_header Upgrade $http_upgrade;
+                  proxy_set_header Connection $connection_upgrade;
+                  proxy_set_header Host $host;
+                  proxy_read_timeout 3600s;
+              }
+          }
+          NGINX
+          sudo nginx -t
+          sudo systemctl restart nginx
+
+      - name: Start Chrome in Xpra
+        run: |
+          set -euo pipefail
+          xpra start :100 \
+            --bind-tcp=127.0.0.1:14500 \
+            --html=on \
+            --daemon=yes \
+            --exit-with-children \
+            --encoding=h264 \
+            --quality=50 \
+            --start-child="google-chrome-stable --no-sandbox --disable-dev-shm-usage --no-first-run --no-default-browser-check --window-size=1280,720"
+
+          for attempt in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:14500/ >/dev/null; then
+              exit 0
+            fi
+            sleep 2
+          done
+
+          echo "::error::Xpra did not start its HTML interface."
+          xpra list || true
+          exit 1
+
+      - name: Start temporary Cloudflare Tunnel
+        run: |
+          set -euo pipefail
+          cloudflared tunnel --no-autoupdate --url http://127.0.0.1:8080 \
+            > /tmp/cloudflared.log 2>&1 &
+
+          for attempt in $(seq 1 30); do
+            URL="$(grep -Eo 'https://[a-zA-Z0-9.-]+\.trycloudflare\.com' /tmp/cloudflared.log | head -n 1 || true)"
+            if [ -n "$URL" ]; then
+              echo "Remote browser URL: $URL"
+              echo "Log in with username: browser and the password stored in the XPRA_PASSWORD secret."
+              sleep 1800
+              exit 0
+            fi
+            sleep 2
+          done
+
+          echo "::error::Cloudflare Tunnel did not provide a URL."
+          cat /tmp/cloudflared.log
+          exit 1
