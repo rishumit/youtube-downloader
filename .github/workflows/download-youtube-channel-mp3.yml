@@ -131,17 +131,48 @@ jobs:
           if not files:
               raise SystemExit("No MP3 files were downloaded.")
 
-          with zipfile.ZipFile("youtube-channel-mp3.zip", "w", compression=zipfile.ZIP_STORED) as archive:
-              for path in files:
-                  archive.write(path, arcname=path.relative_to(downloads))
+          max_part_bytes = 1_800_000_000
+          upload_limit_bytes = 2_147_483_648
+          parts = []
+          current_part = []
+          current_part_size = 22
+
+          for path in files:
+              archive_name = path.relative_to(downloads).as_posix()
+              estimated_size = path.stat().st_size + 2 * len(archive_name.encode("utf-8")) + 128
+              if estimated_size > max_part_bytes:
+                  raise SystemExit(f"{path.name} is too large to fit in a ZIP part.")
+              if current_part and current_part_size + estimated_size > max_part_bytes:
+                  parts.append(current_part)
+                  current_part = []
+                  current_part_size = 22
+              current_part.append(path)
+              current_part_size += estimated_size
+          if current_part:
+              parts.append(current_part)
+
+          for part_number, part_files in enumerate(parts, start=1):
+              archive_path = Path(f"youtube-channel-mp3-{part_number:03}.zip")
+              with zipfile.ZipFile(archive_path, "w", compression=zipfile.ZIP_STORED) as archive:
+                  for path in part_files:
+                      archive.write(path, arcname=path.relative_to(downloads))
+              if archive_path.stat().st_size >= upload_limit_bytes:
+                  raise SystemExit(f"{archive_path.name} exceeds GitHub's 2 GiB release asset limit.")
           PY
 
-      - name: Upload ZIP to GitHub Release
+      - name: Upload ZIP parts to GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: youtube-mp3-${{ github.run_id }}-${{ github.run_attempt }}
         run: |
-          gh release create "$RELEASE_TAG" youtube-channel-mp3.zip \
+          shopt -s nullglob
+          archives=(youtube-channel-mp3-*.zip)
+          if ((${#archives[@]} == 0)); then
+            echo "::error::No ZIP archives were created."
+            exit 1
+          fi
+
+          gh release create "$RELEASE_TAG" "${archives[@]}" \
             --repo "$GITHUB_REPOSITORY" \
             --title "YouTube channel MP3s $RELEASE_TAG" \
-            --notes "Authorized channel audio downloaded by GitHub Actions run $GITHUB_RUN_ID."
+            --notes "Authorized channel audio downloaded by GitHub Actions run $GITHUB_RUN_ID. Download every numbered ZIP part."

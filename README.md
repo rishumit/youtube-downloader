@@ -19,6 +19,6 @@ Downloads are subject to YouTube availability and GitHub Actions/Release size an
 
 1. Open **Actions** and select **Download YouTube Channel MP3s**.
 2. Select **Run workflow**, enter the channel's YouTube URL (prefer its `/videos` page), and confirm that you own the content or have permission to download it.
-3. Run the workflow. When it finishes, open the Release created by that run and download `youtube-channel-mp3.zip`.
+3. Run the workflow. When it finishes, open the Release created by that run and download all numbered ZIP parts.
 
-The ZIP contains MP3 audio files named after their YouTube titles, with the video ID included to avoid filename collisions. The workflow uses the optional `YOUTUBE_COOKIES` secret described above. Downloads are subject to YouTube availability and GitHub Actions/Release size and runtime limits.
+The ZIP parts contain MP3 audio files named after their YouTube titles, with the video ID included to avoid filename collisions. Large channels are split into multiple parts to stay below GitHub's 2 GiB per-file release limit. The workflow uses the optional `YOUTUBE_COOKIES` secret described above. Downloads are subject to YouTube availability and GitHub Actions runtime limits.
