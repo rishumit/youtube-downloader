@@ -14,3 +14,11 @@ The ZIP contains MP4 videos named after their YouTube titles, with the video ID 
 For videos that require your account, add a repository Actions secret named `YOUTUBE_COOKIES` containing cookies in Netscape format. Do not commit cookies to the repository.
 
 Downloads are subject to YouTube availability and GitHub Actions/Release size and runtime limits. A large channel may exceed the six-hour workflow timeout or the 2 GB per-file GitHub Release limit.
+
+## Download an authorized channel as MP3
+
+1. Open **Actions** and select **Download YouTube Channel MP3s**.
+2. Select **Run workflow**, enter the channel's YouTube URL (prefer its `/videos` page), and confirm that you own the content or have permission to download it.
+3. Run the workflow. When it finishes, open the Release created by that run and download `youtube-channel-mp3.zip`.
+
+The ZIP contains MP3 audio files named after their YouTube titles, with the video ID included to avoid filename collisions. The workflow uses the optional `YOUTUBE_COOKIES` secret described above. Downloads are subject to YouTube availability and GitHub Actions/Release size and runtime limits.
